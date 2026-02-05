@@ -1,14 +1,16 @@
 #!/bin/bash
 
 # ==============================================================================
-#   Версия 4.0: Универсальный скрипт (Smart Sudo, Auto-Discovery)
+#   Docker Compose Manager
+#   Version: 5.1 (Sorted & Organized)
 # ==============================================================================
 
-# --- Настройки ---
+# --- I. Configuration & Constants ---
 set -e
+SCRIPT_VERSION="5.0"
 HINT_COLUMN=30
 
-# Цвета
+# Colors (Standard UI Palette)
 C_RESET='\033[0m'
 C_RED='\033[0;31m'
 C_GREEN='\033[0;32m'
@@ -16,254 +18,310 @@ C_YELLOW='\033[0;33m'
 C_CYAN='\033[1;96m'
 C_GRAY='\033[0;90m'
 
-# Определяем, где лежит скрипт
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-
-# --- Логика определения рабочей директории ---
-# Поиск файла конфигурации (приоритет по стандартам Docker)
+# Discovery targets
 COMPOSE_FILES=("compose.yaml" "compose.yml" "docker-compose.yml" "docker-compose.yaml")
-PROJECT_ROOT=""
 
-check_files() {
-    local dir=$1
-    for file in "${COMPOSE_FILES[@]}"; do
-        if [ -f "$dir/$file" ]; then
-            echo "$dir"
-            return 0
-        fi
+# Internal State (Will be populated by discovery/detection)
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+PROJECT_NAME=""
+SUDO_PREFIX=""
+COMPOSE_CMD=()
+
+# --- II. Core Utilities ---
+
+# Unified logging helper
+log_msg() {
+    local level=$1
+    local msg=$2
+    case "$level" in
+        "INFO")   echo -e "${C_GREEN}INFO: ${msg}${C_RESET}" ;;
+        "WARN")   echo -e "${C_YELLOW}WARN: ${msg}${C_RESET}" ;;
+        "ERROR")  echo -e "${C_RED}ERROR: ${msg}${C_RESET}" ;;
+        "HEADER") echo -e "${C_CYAN}${msg}${C_RESET}" ;;
+        *)        echo -e "${msg}" ;;
+    esac
+}
+
+# Recursive project root discovery
+find_project_root() {
+    local current_dir="$1"
+    # Max depth for safety (e.g. 10 levels up)
+    for (( i=0; i<10; i++ )); do
+        for file in "${COMPOSE_FILES[@]}"; do
+            if [[ -f "$current_dir/$file" ]]; then
+                echo "$current_dir"
+                return 0
+            fi
+        done
+        # Stop at root
+        if [[ "$current_dir" == "/" ]]; then break; fi
+        current_dir=$(dirname "$current_dir")
     done
     return 1
 }
 
-if check_files "." > /dev/null; then
-    PROJECT_ROOT="."
-elif check_files "$SCRIPT_DIR" > /dev/null; then
-    cd "$SCRIPT_DIR" || exit 1
-    PROJECT_ROOT="$SCRIPT_DIR"
-else
-    echo -e "${C_RED}Ошибка: Файл конфигурации (compose.yaml, docker-compose.yml и т.д.) не найден.${C_RESET}"
-    echo -e "${C_GRAY}Поиск выполнялся в:${C_RESET}"
-    echo -e "  - $(pwd)"
-    echo -e "  - $SCRIPT_DIR"
-    exit 1
-fi
+# Wrapper for Docker Compose commands
+run_compose() {
+    ${SUDO_PREFIX:+$SUDO_PREFIX} "${COMPOSE_CMD[@]}" "$@"
+}
 
-PROJECT_NAME=$(basename "$(pwd)")
-echo -e "${C_CYAN}>> Working Project Root: ${C_GRAY}$(pwd)${C_RESET}"
+# --- III. Initialization & Environment Detection ---
 
-# --- Определение команды Docker и прав доступа (Smart Sudo) ---
-DOCKER_CMD="docker"
-COMPOSE_CMD=""
-SUDO_PREFIX=""
+init_environment() {
+    # 1. Discover Working Directory
+    local target_dir
+    target_dir=$(find_project_root "$(pwd)")
 
-# Проверяем, нужен ли sudo для docker
-if ! command -v docker &> /dev/null; then
-    echo -e "${C_RED}Docker не установлен.${C_RESET}"
-    exit 1
-fi
+    if [[ -z "$target_dir" ]]; then
+        # Try script directory as fallback
+        target_dir=$(find_project_root "$SCRIPT_DIR")
+    fi
 
-if ! docker ps &> /dev/null; then
-    if command -v sudo &> /dev/null; then
-        SUDO_PREFIX="sudo"
-        # Проверка, работает ли sudo с docker (попросит пароль, если нужно)
-        if ! sudo docker ps &> /dev/null; then
-             echo -e "${C_RED}Ошибка: Нет прав на выполнение Docker команд (даже через sudo).${C_RESET}"
-             exit 1
-        fi
+    if [[ -n "$target_dir" ]]; then
+        cd "$target_dir" || exit 1
     else
-        echo -e "${C_RED}Ошибка: У пользователя нет прав на Docker и sudo не найден.${C_RESET}"
+        log_msg "ERROR" "Configuration file (compose.yaml, docker-compose.yml, etc.) not found recursively."
+        echo -e "${C_GRAY}Searched from: $(pwd) and $SCRIPT_DIR${C_RESET}"
         exit 1
     fi
-fi
 
-# Определение версии Compose (V2 plugin или V1 standalone)
-# ВАЖНО: Проверяем доступность именно через SUDO_PREFIX, так как sudo может не видеть пользовательские плагины
-if $SUDO_PREFIX docker compose version &> /dev/null; then
-    COMPOSE_CMD="$SUDO_PREFIX docker compose"
-elif $SUDO_PREFIX docker-compose version &> /dev/null; then
-    COMPOSE_CMD="$SUDO_PREFIX docker-compose"
-else
-    echo -e "${C_RED}Ошибка: docker compose не найден (или недоступен через $SUDO_PREFIX).${C_RESET}"
-    exit 1
-fi
+    PROJECT_NAME=$(basename "$(pwd)")
 
-# Обертка для выполнения команд
-run_compose() {
-    $COMPOSE_CMD "$@"
-}
-
-# --- Функции управления ---
-
-start_project() {
-    echo -e "${C_GREEN}✅ Запуск проекта '${PROJECT_NAME}'...${C_RESET}"
-    
-    # Проверка состояния перед запуском
-    if run_compose ps -q &>/dev/null; then
-         echo -e "${C_YELLOW}Контейнеры проекта уже существуют.${C_RESET}"
+    # 2. Check Docker Presence
+    if ! command -v docker &> /dev/null; then
+        log_msg "ERROR" "Docker is not installed."
+        exit 1
     fi
 
-    run_compose up -d
-    echo -e "${C_GREEN}Проект запущен.${C_RESET}"
+    # 3. Handle sudo/permissions
+    if ! docker ps &> /dev/null; then
+        if command -v sudo &> /dev/null; then
+            SUDO_PREFIX="sudo"
+            if ! sudo docker ps &> /dev/null; then
+                 log_msg "ERROR" "No Docker permissions (even with sudo)."
+                 exit 1
+            fi
+        else
+            log_msg "ERROR" "No Docker permissions and 'sudo' not found."
+            exit 1
+        fi
+    fi
+
+    # 4. Detect Compose Command
+    if ${SUDO_PREFIX:+$SUDO_PREFIX} docker compose version &> /dev/null; then
+        COMPOSE_CMD=("docker" "compose")
+    elif ${SUDO_PREFIX:+$SUDO_PREFIX} docker-compose version &> /dev/null; then
+        COMPOSE_CMD=("docker-compose")
+    else
+        log_msg "ERROR" "Docker Compose not found."
+        exit 1
+    fi
 }
 
-stop_project() {
-    echo -e "${C_YELLOW} Остановка проекта '${PROJECT_NAME}'...${C_RESET}"
-    run_compose down
-    echo -e "${C_YELLOW}Проект остановлен.${C_RESET}"
-}
+# --- IV. Action Functions ---
 
-restart_project() {
-    echo -e "${C_CYAN} Быстрый перезапуск (Native Restart) '${PROJECT_NAME}'...${C_RESET}"
-    run_compose restart
-    echo -e "${C_GREEN}Сервисы перезапущены.${C_RESET}"
-}
-
-update_project() {
-    echo -e "${C_CYAN} Обновление проекта '${PROJECT_NAME}'...${C_RESET}"
-    
-    echo -e "${C_GRAY}1/3: Скачивание новых образов...${C_RESET}"
-    run_compose pull
-    
-    echo -e "${C_GRAY}2/3: Применение изменений...${C_RESET}"
-    run_compose up -d --remove-orphans
-    
-    echo -e "${C_GRAY}3/3: Очистка старых версий образов (dangling)...${C_RESET}"
-    # Удаляем только висячие образы, чтобы не забивать диск после обновлений
-    $SUDO_PREFIX docker image prune -f
-    
-    echo -e "${C_GREEN} Проект успешно обновлен!${C_RESET}"
-}
-
-rebuild_project() {
-    echo -e "${C_CYAN}️ Полное пересоздание контейнеров...${C_RESET}"
-    run_compose up -d --force-recreate --build
-    echo -e "${C_GREEN}Контейнеры пересобраны и запущены.${C_RESET}"
-}
-
+# --- Observability ---
 show_status() {
-    echo -e "${C_CYAN} Статус контейнеров:${C_RESET}"
+    log_msg "HEADER" "Container Status:"
     run_compose ps
 }
 
 show_logs() {
-    echo -e "${C_GRAY} Логи (Ctrl+C для выхода)...${C_RESET}"
-    # Используем subshell и trap для корректного выхода, но set +e здесь важен
-    (set +e; run_compose logs -f --tail="100")
+    log_msg "HEADER" "Logs (Ctrl+C to exit):"
+    run_compose logs -f --tail="100" || true
+}
+
+# --- Lifecycle ---
+start_project() {
+    log_msg "INFO" "Starting project '${PROJECT_NAME}'..."
+    if [[ -n "$(run_compose ps --filter "status=running" -q 2>/dev/null)" ]]; then
+         log_msg "WARN" "Some services are already running."
+    fi
+    run_compose up -d
+    log_msg "INFO" "Project started."
+}
+
+stop_project() {
+    log_msg "WARN" "Stopping project '${PROJECT_NAME}'..."
+    run_compose down
+    log_msg "INFO" "Project stopped."
+}
+
+restart_containers() {
+    log_msg "HEADER" "Quick Restarting containers for '${PROJECT_NAME}'..."
+    run_compose restart
+    log_msg "INFO" "Containers restarted."
+}
+
+reload_project() {
+    log_msg "HEADER" "Applying configuration (Reload) for '${PROJECT_NAME}'..."
+    run_compose up -d --remove-orphans
+    log_msg "INFO" "Configuration applied."
+}
+
+# --- Maintenance ---
+update_project() {
+    log_msg "HEADER" "Updating project '${PROJECT_NAME}'..."
+    log_msg "INFO" "1/2: Pulling new images..."
+    run_compose pull
+    log_msg "INFO" "2/2: Applying changes..."
+    run_compose up -d --remove-orphans
+    log_msg "INFO" "Project updated successfully!"
+}
+
+rebuild_project() {
+    log_msg "HEADER" "Full recreation of containers..."
+    run_compose up -d --force-recreate --build
+    log_msg "INFO" "Containers rebuilt and started."
 }
 
 open_shell() {
     local service=$1
-    if [ -z "$service" ]; then
-        echo -e "${C_YELLOW}Доступные сервисы:${C_RESET}"
+    if [[ -z "$service" ]]; then
+        log_msg "INFO" "Available services:"
         run_compose ps --services
-        read -p "Введите имя сервиса: " service
-        if [ -z "$service" ]; then echo -e "${C_RED}Отмена.${C_RESET}"; return 1; fi
+        read -p "Enter service name: " service
+        if [[ -z "$service" ]]; then log_msg "WARN" "Cancelled."; return 1; fi
     fi
-    echo -e "${C_GREEN}Вход в shell сервиса '$service'...${C_RESET}"
-    # Пытаемся запустить bash, если нет - sh
-    (set +e; 
-     if ! run_compose exec "$service" /bin/bash; then
-        echo -e "${C_GRAY}Bash не найден, переключаюсь на sh...${C_RESET}"
+
+    # Check if container is running
+    if [[ -z "$(run_compose ps --filter "status=running" --services | grep -w "$service" || true)" ]]; then
+        log_msg "ERROR" "Service '$service' is not running. Start it first."
+        return 1
+    fi
+
+    log_msg "INFO" "Entering shell of service '$service'..."
+    if ! run_compose exec "$service" /bin/bash; then
+        log_msg "WARN" "Bash not found, falling back to sh..."
         run_compose exec "$service" /bin/sh
-     fi
-    )
+    fi
 }
 
+# --- Cleanup ---
 prune_system() {
-    echo -e "${C_RED}ВНИМАНИЕ: Очистка ВСЕЙ системы Docker (не только этого проекта).${C_RESET}"
-    read -p "Удалить остановленные контейнеры, сети и висячие образы? [y/N]: " confirmation
+    log_msg "ERROR" "WARNING: Cleaning WHOLE Docker system (not just this project)."
+    read -p "Remove stopped containers, networks, and dangling images? [y/N]: " confirmation
     if [[ "$confirmation" =~ ^[Yy]$ ]]; then
-        # Убрали флаг -a для безопасности (удалять только dangling)
-        $SUDO_PREFIX docker system prune -f
-        echo -e "${C_GREEN}Система очищена (dangling images и stopped containers).${C_RESET}"
+        ${SUDO_PREFIX:+$SUDO_PREFIX} docker system prune -f
+        log_msg "INFO" "System cleaned."
     else
-        echo "Отменено."
+        log_msg "INFO" "Cancelled."
     fi
 }
 
 destroy_project() {
-    echo -e "${C_RED}!!! ВНИМАНИЕ: УДАЛЕНИЕ ПРОЕКТА !!!${C_RESET}"
-    echo -e "${C_YELLOW}Будут удалены контейнеры, сети и ВСЕ ДАННЫЕ В ТОМАХ (Volumes).${C_RESET}"
-    read -p "Вы действительно хотите уничтожить проект? [y/N]: " confirmation
-
+    log_msg "ERROR" "!!! WARNING: DESTROYING PROJECT !!!"
+    log_msg "WARN" "Containers, networks, and ALL DATA IN VOLUMES will be deleted."
+    read -p "Are you sure? [y/N]: " confirmation
     if [[ "$confirmation" =~ ^[Yy]$ ]]; then
-        echo -e "${C_YELLOW}Удаление...${C_RESET}"
-        run_compose down -v --rmi all
-        echo -e "${C_GREEN}Проект уничтожен.${C_RESET}"
+        log_msg "WARN" "Destroying..."
+        run_compose down -v --rmi local
+        log_msg "INFO" "Project destroyed."
     else
-        echo "Отменено."
+        log_msg "INFO" "Cancelled."
     fi
 }
 
-# --- Интерактивное меню ---
+# --- V. Interactive Menu ---
+
 show_interactive_menu() {
-    # Обработка прерывания Ctrl+C: не выходим, а просто обновляем строку ввода
-    trap 'echo -e "\n${C_GRAY}Используйте пункт 0 для выхода.${C_RESET}"' SIGINT
+    # Reset trap on exit
+    trap 'return' SIGINT
 
     while true; do
-        local format_default=" [${C_YELLOW}%s${C_RESET}] %s\033[${HINT_COLUMN}G${C_GRAY}%s${C_RESET}\n"
+        # --- Live Metrics ---
+        local TOTAL_SVCS UP_SVCS
+        TOTAL_SVCS=$(run_compose config --services 2>/dev/null | grep -c . || echo "0")
+        UP_SVCS=$(run_compose ps -q 2>/dev/null | grep -c . || echo "0")
+
+        local STATUS_LINE
+        if [[ "$UP_SVCS" -eq "0" ]]; then
+            STATUS_LINE="${C_RED}STOPPED${C_RESET}"
+        elif [[ "$UP_SVCS" -ge "$TOTAL_SVCS" ]] && [[ "$TOTAL_SVCS" -gt "0" ]]; then
+            STATUS_LINE="${C_GREEN}RUNNING (${UP_SVCS}/${TOTAL_SVCS})${C_RESET}"
+        else
+            STATUS_LINE="${C_YELLOW}PARTIAL (${UP_SVCS}/${TOTAL_SVCS})${C_RESET}"
+        fi
+
+        local format="${C_GRAY} [%s] %s\033[${HINT_COLUMN}G%s${C_RESET}\n"
+        local format_val=" [${C_YELLOW}%s${C_RESET}] %s\033[${HINT_COLUMN}G${C_GRAY}%s${C_RESET}\n"
         local format_danger=" [${C_YELLOW}%s${C_RESET}] %s\033[${HINT_COLUMN}G${C_RED}%s${C_RESET}\n"
 
         clear
         echo -e "${C_CYAN}======================================================================${C_RESET}"
-        echo -e "   Проект: ${C_GREEN}${PROJECT_NAME}${C_RESET} | Путь: ${C_GRAY}$(pwd)${C_RESET}"
-        if [ -n "$SUDO_PREFIX" ]; then echo -e "   Режим:  ${C_RED}SUDO${C_RESET}"; fi
-        echo -e "${C_CYAN}======================================================================${C_RESET}"
-        
-        printf "$format_default" "1" "Запустить (Start)" "up -d"
-        printf "$format_default" "2" "Остановить (Stop)" "down"
-        printf "$format_default" "3" "Рестарт (Restart)" "native restart"
-        printf "$format_default" "4" "Обновить (Update)" "pull + up + clean images"
-        printf "$format_default" "5" "Статус (PS)" "Показать контейнеры"
-        printf "$format_default" "6" "Логи (Logs)" "Просмотр логов"
-        echo ""
-        printf "$format_default" "7" "Консоль (Shell)" "Вход в контейнер"
-        printf "$format_default" "8" "Пересобрать (Rebuild)" "force-recreate --build"
-        printf "$format_danger"  "9" "Очистка системы" "docker system prune"
-        printf "$format_danger"  "10" "УДАЛИТЬ (Destroy)" "down -v (удалит данные!)"
-        echo ""
-        printf "$format_default" "0" "Выход" ""
+        echo -e "   DCM:     ${C_GREEN}v${SCRIPT_VERSION}${C_RESET}"
+        echo -e "   Project: ${C_CYAN}${PROJECT_NAME}${C_RESET}"
+        echo -e "   Path:    ${C_GRAY}$(pwd)${C_RESET}"
+        echo -e "   Status:  ${STATUS_LINE}"
+        [[ -n "$SUDO_PREFIX" ]] && echo -e "   Mode:    ${C_RED}SUDO (Privileged)${C_RESET}"
         echo -e "${C_CYAN}======================================================================${C_RESET}"
 
-        read -p "Ваш выбор: " choice
-        
-        # В интерактивном режиме ошибки команд не должны ломать скрипт
-        set +e
-        case "$choice" in
-            1) start_project ;; 2) stop_project ;; 3) restart_project ;;
-            4) update_project ;; 5) show_status ;; 6) show_logs ;;
-            7) open_shell ;; 8) rebuild_project ;; 9) prune_system ;;
-            10) destroy_project ;;
-            0) exit 0 ;;
-            *) echo -e "${C_RED}Неверный ввод.${C_RESET}" ;;
-        esac
-        # Возвращаем строгий режим, но только если не выходим
-        set -e
+        printf "$format_val" "1" "Start" "up -d"
+        printf "$format_val" "2" "Stop" "down"
+        printf "$format_val" "3" "Restart" "Quick container restart"
+        printf "$format_val" "4" "Reload" "Apply config (up -d)"
+        printf "$format_val" "5" "Update" "pull + up"
+        printf "$format_val" "6" "Status (PS)" "Show processes"
+        printf "$format_val" "7" "Logs" "Follow output"
+        echo ""
+        printf "$format_val" "8" "Shell" "Enter container"
+        printf "$format_val" "9" "Rebuild" "force-recreate --build"
+        printf "$format_danger" "10" "DESTROY" "down -v --rmi local"
+        printf "$format_danger" "11" "System Prune" "docker system prune"
+        echo ""
+        printf "$format_val" "0" "Exit" ""
+        echo -e "${C_CYAN}======================================================================${C_RESET}"
 
-        if [[ "$choice" != "0" ]]; then
-            echo ""
-            read -p "Нажмите Enter для продолжения..."
+        read -p "Selection: " choice
+
+        if [[ ! "$choice" =~ ^[0-9]+$ ]]; then
+            log_msg "ERROR" "Invalid input. Please enter a number."
+            sleep 1
+            continue
         fi
+
+        case "$choice" in
+            1) (start_project) ;;
+            2) (stop_project) ;;
+            3) (restart_containers) ;;
+            4) (reload_project) ;;
+            5) (update_project) ;;
+            6) (show_status) ;;
+            7) (show_logs) ;;
+            8) (open_shell) ;;
+            9) (rebuild_project) ;;
+            10) (destroy_project) ;;
+            11) (prune_system) ;;
+            0) exit 0 ;;
+            *) log_msg "ERROR" "Unknown option." ;;
+        esac
+
+        echo ""
+        read -p "Press Enter to continue..."
     done
 }
 
-# --- Запуск ---
-# Если скрипт запущен с аргументами, выполняем их
-if [ -n "$1" ]; then
+# --- VI. Main Execution ---
+
+init_environment
+log_msg "HEADER" ">> Working Project: ${C_GRAY}$(pwd)${C_RESET}"
+
+if [[ -n "$1" ]]; then
     case "$1" in
-        start) start_project ;;
-        stop) stop_project ;;
-        restart) restart_project ;;
-        update) update_project ;;
+        start)   start_project ;;
+        stop)    stop_project ;;
+        restart) restart_containers ;;
+        reload)  reload_project ;;
+        update)  update_project ;;
         rebuild) rebuild_project ;;
-        status) show_status ;;
-        logs) show_logs ;;
-        shell) open_shell "$2" ;;
-        prune) prune_system ;;
+        status)  show_status ;;
+        logs)    show_logs ;;
+        shell)   open_shell "$2" ;;
+        prune)   prune_system ;;
         destroy) destroy_project ;;
         *)
-            echo -e "${C_RED}Неизвестная команда: $1${C_RESET}"
-            echo "Доступные команды: start, stop, restart, update, rebuild, status, logs, shell [service], prune, destroy"
+            log_msg "ERROR" "Unknown command: $1"
+            echo "Usage: $0 {start|stop|restart|reload|update|rebuild|status|logs|shell [service]|prune|destroy}"
             exit 1
             ;;
     esac
