@@ -2,12 +2,11 @@
 
 # ==============================================================================
 #   Docker Compose Manager
-#   Version: 5.0
 # ==============================================================================
 
 # --- I. Configuration & Constants ---
 set -e
-SCRIPT_VERSION="5.0"
+SCRIPT_VERSION="5.1"
 HINT_COLUMN=30
 
 # Colors (Standard UI Palette)
@@ -24,6 +23,7 @@ COMPOSE_FILES=("compose.yaml" "compose.yml" "docker-compose.yml" "docker-compose
 # Internal State (Will be populated by discovery/detection)
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 PROJECT_NAME=""
+PROJECT_ROOT_FOUND="false"
 SUDO_PREFIX=""
 COMPOSE_CMD=()
 
@@ -82,54 +82,67 @@ get_inode() {
 init_environment() {
 	# 1. Discover Working Directory
 	local target_dir
-	target_dir=$(find_project_root "$(pwd)")
+	target_dir=$(find_project_root "$(pwd)") || true
 
 	if [[ -z "$target_dir" ]]; then
 		# Try script directory as fallback (only if not running globally)
 		if [[ "$SCRIPT_DIR" != "/usr/local/bin" && "$SCRIPT_DIR" != "/usr/bin" ]]; then
-			target_dir=$(find_project_root "$SCRIPT_DIR")
+			target_dir=$(find_project_root "$SCRIPT_DIR") || true
 		fi
 	fi
 
 	if [[ -n "$target_dir" ]]; then
 		cd "$target_dir" || exit 1
+		PROJECT_ROOT_FOUND="true"
+		PROJECT_NAME=$(basename "$(pwd)")
 	else
-		log_msg "ERROR" "Configuration file (compose.yaml, docker-compose.yml, etc.) not found recursively."
-		echo -e "${C_GRAY}Searched from: $(pwd)${C_RESET}"
-		exit 1
+		PROJECT_ROOT_FOUND="false"
+		PROJECT_NAME="<No Config>"
 	fi
 
-	PROJECT_NAME=$(basename "$(pwd)")
-
-	# 2. Check Docker Presence
+	# 2. Check Docker Presence (Critical)
 	if ! command -v docker &>/dev/null; then
-		log_msg "ERROR" "Docker is not installed."
-		exit 1
+		# If we are just installing/uninstalling or have no config, missing docker might be okay for now,
+		# but for any project action it's fatal.
+		if [[ "$PROJECT_ROOT_FOUND" == "true" ]]; then
+			log_msg "ERROR" "Docker is not installed."
+			exit 1
+		fi
+		# If no project, we just warn or ignore until an action is required
 	fi
 
-	# 3. Handle sudo/permissions
-	if ! docker ps &>/dev/null; then
-		if command -v sudo &>/dev/null; then
-			SUDO_PREFIX="sudo"
-			if ! sudo docker ps &>/dev/null; then
-				log_msg "ERROR" "No Docker permissions (even with sudo)."
+	# 3. Handle sudo/permissions & 4. Detect Compose Command
+	# ONLY do this if we actually have a project to work with.
+	# Avoiding 'docker ps' checks prevents hanging if Docker is present but unresponsive
+	# in a directory without a config.
+	if [[ "$PROJECT_ROOT_FOUND" == "true" ]]; then
+		if [[ -n "$(command -v docker)" ]]; then
+			if ! timeout 5 docker ps &>/dev/null 2>&1; then
+				if command -v sudo &>/dev/null; then
+					SUDO_PREFIX="sudo"
+					if ! timeout 5 sudo docker ps &>/dev/null 2>&1; then
+						log_msg "ERROR" "No Docker permissions or Docker daemon not running."
+						exit 1
+					fi
+				else
+					log_msg "ERROR" "No Docker permissions and 'sudo' not found."
+					exit 1
+				fi
+			fi
+
+			if ${SUDO_PREFIX:+$SUDO_PREFIX} docker compose version &>/dev/null; then
+				COMPOSE_CMD=("docker" "compose")
+			elif ${SUDO_PREFIX:+$SUDO_PREFIX} docker-compose version &>/dev/null; then
+				COMPOSE_CMD=("docker-compose")
+			else
+				log_msg "ERROR" "Docker Compose not found."
 				exit 1
 			fi
-		else
-			log_msg "ERROR" "No Docker permissions and 'sudo' not found."
-			exit 1
 		fi
 	fi
 
-	# 4. Detect Compose Command
-	if ${SUDO_PREFIX:+$SUDO_PREFIX} docker compose version &>/dev/null; then
-		COMPOSE_CMD=("docker" "compose")
-	elif ${SUDO_PREFIX:+$SUDO_PREFIX} docker-compose version &>/dev/null; then
-		COMPOSE_CMD=("docker-compose")
-	else
-		log_msg "ERROR" "Docker Compose not found."
-		exit 1
-	fi
+	# 5. Log working directory
+	log_msg "HEADER" ">> Working Project: ${C_GRAY}$(pwd)${C_RESET}"
 }
 
 # --- IV. Action Functions ---
@@ -297,6 +310,10 @@ uninstall_globally() {
 
 # --- Cleanup ---
 prune_system() {
+	if ! command -v docker &>/dev/null; then
+		log_msg "ERROR" "Docker is not installed."
+		return 1
+	fi
 	log_msg "ERROR" "WARNING: Cleaning WHOLE Docker system (not just this project)."
 	read -p "Remove stopped containers, networks, and dangling images? [y/N]: " confirmation
 	if [[ "$confirmation" =~ ^[Yy]$ ]]; then
@@ -328,17 +345,21 @@ show_interactive_menu() {
 
 	while true; do
 		# --- Live Metrics ---
-		local TOTAL_SVCS UP_SVCS
-		TOTAL_SVCS=$(run_compose config --services 2>/dev/null | grep -c . || true)
-		UP_SVCS=$(run_compose ps -q 2>/dev/null | grep -c . || true)
+		local TOTAL_SVCS UP_SVCS STATUS_LINE
 
-		local STATUS_LINE
-		if [[ "$UP_SVCS" -eq "0" ]]; then
-			STATUS_LINE="${C_RED}STOPPED${C_RESET}"
-		elif [[ "$UP_SVCS" -ge "$TOTAL_SVCS" ]] && [[ "$TOTAL_SVCS" -gt "0" ]]; then
-			STATUS_LINE="${C_GREEN}RUNNING (${UP_SVCS}/${TOTAL_SVCS})${C_RESET}"
+		if [[ "$PROJECT_ROOT_FOUND" == "true" ]]; then
+			TOTAL_SVCS=$(run_compose config --services 2>/dev/null | grep -c . || true)
+			UP_SVCS=$(run_compose ps -q 2>/dev/null | grep -c . || true)
+
+			if [[ "$UP_SVCS" -eq "0" ]]; then
+				STATUS_LINE="${C_RED}STOPPED${C_RESET}"
+			elif [[ "$UP_SVCS" -ge "$TOTAL_SVCS" ]] && [[ "$TOTAL_SVCS" -gt "0" ]]; then
+				STATUS_LINE="${C_GREEN}RUNNING (${UP_SVCS}/${TOTAL_SVCS})${C_RESET}"
+			else
+				STATUS_LINE="${C_YELLOW}PARTIAL (${UP_SVCS}/${TOTAL_SVCS})${C_RESET}"
+			fi
 		else
-			STATUS_LINE="${C_YELLOW}PARTIAL (${UP_SVCS}/${TOTAL_SVCS})${C_RESET}"
+			STATUS_LINE="${C_YELLOW}NO CONFIG FOUND${C_RESET}"
 		fi
 
 		local format="${C_GRAY} [%s] %s\033[${HINT_COLUMN}G%s${C_RESET}\n"
@@ -354,19 +375,27 @@ show_interactive_menu() {
 		[[ -n "$SUDO_PREFIX" ]] && echo -e "   Mode:    ${C_RED}SUDO (Privileged)${C_RESET}"
 		echo -e "${C_CYAN}======================================================================${C_RESET}"
 
-		printf "$format_val" "1" "Start" "up -d"
-		printf "$format_val" "2" "Stop" "down"
-		printf "$format_val" "3" "Restart" "Quick container restart"
-		printf "$format_val" "4" "Reload" "Apply config (up -d)"
-		printf "$format_val" "5" "Update" "pull + up"
-		printf "$format_val" "6" "Status (PS)" "Show processes"
-		printf "$format_val" "7" "Logs" "Follow output"
-		echo ""
-		printf "$format_val" "8" "Shell" "Enter container"
-		printf "$format_val" "9" "Rebuild" "force-recreate --build"
-		printf "$format_danger" "10" "DESTROY" "down -v --rmi local"
+		if [[ "$PROJECT_ROOT_FOUND" == "true" ]]; then
+			echo -e "${C_GRAY}--- Project Actions ---${C_RESET}"
+			printf "$format_val" "1" "Status (PS)" "Show processes"
+			printf "$format_val" "2" "Logs" "Follow output"
+			printf "$format_val" "3" "Shell" "Enter container"
+			echo ""
+			printf "$format_val" "4" "Start" "up -d"
+			printf "$format_val" "5" "Stop" "down"
+			printf "$format_val" "6" "Restart" "Quick container restart"
+			printf "$format_val" "7" "Reload" "Apply config (up -d)"
+			printf "$format_val" "8" "Update" "pull + up"
+			printf "$format_val" "9" "Rebuild" "force-recreate --build"
+			echo ""
+			printf "$format_danger" "10" "DESTROY" "down -v --rmi local"
+			echo ""
+		fi
+
+		echo -e "${C_GRAY}--- System Actions ---${C_RESET}"
 		printf "$format_danger" "11" "System Prune" "docker system prune"
 		echo ""
+		echo -e "${C_GRAY}--- Global Actions ---${C_RESET}"
 		printf "$format_val" "i" "Install" "Install to $INSTALL_PATH"
 		printf "$format_val" "u" "Uninstall" "Remove from $INSTALL_PATH"
 		printf "$format_val" "0" "Exit" ""
@@ -374,20 +403,32 @@ show_interactive_menu() {
 
 		read -p "Selection: " choice
 
+		# Validate: allow only system/global actions without config
 		case "$choice" in
-		1) (start_project) ;;
-		2) (stop_project) ;;
-		3) (restart_containers) ;;
-		4) (reload_project) ;;
-		5) (update_project) ;;
-		6) (show_status) ;;
-		7) (show_logs) ;;
-		8) (open_shell) ;;
-		9) (rebuild_project) ;;
-		10) (destroy_project) ;;
-		11) (prune_system) ;;
-		i | I) (install_globally) ;;
-		u | U) (uninstall_globally) ;;
+		11 | i | I | u | U | 0) ;; # Always allowed
+		*)
+			if [[ "$PROJECT_ROOT_FOUND" != "true" ]]; then
+				log_msg "ERROR" "No project configuration found. Cannot perform this action."
+				read -p "Press Enter to continue..."
+				continue
+			fi
+			;;
+		esac
+
+		case "$choice" in
+		1) show_status ;;
+		2) show_logs ;;
+		3) open_shell ;;
+		4) start_project ;;
+		5) stop_project ;;
+		6) restart_containers ;;
+		7) reload_project ;;
+		8) update_project ;;
+		9) rebuild_project ;;
+		10) destroy_project ;;
+		11) prune_system ;;
+		i | I) install_globally ;;
+		u | U) uninstall_globally ;;
 		0) exit 0 ;;
 		*) log_msg "ERROR" "Unknown option." ;;
 		esac
@@ -399,19 +440,41 @@ show_interactive_menu() {
 
 # --- VI. Main Execution ---
 
-# Handle install/uninstall BEFORE init_environment (no Docker needed)
-if [[ "$1" == "install" ]]; then
+require_project() {
+	if [[ "$PROJECT_ROOT_FOUND" != "true" ]]; then
+		log_msg "ERROR" "No project configuration found. Command '$1' requires a valid project."
+		exit 1
+	fi
+}
+
+case "$1" in
+# --- Commands that DON'T need Docker or project ---
+install)
 	install_globally
 	exit $?
-elif [[ "$1" == "uninstall" ]]; then
+	;;
+uninstall)
 	uninstall_globally
 	exit $?
-fi
+	;;
 
-init_environment
-log_msg "HEADER" ">> Working Project: ${C_GRAY}$(pwd)${C_RESET}"
+# --- Commands that need Docker but NOT a project ---
+prune)
+	init_environment
+	prune_system
+	;;
 
-if [[ -n "$1" ]]; then
+# --- Interactive menu ---
+"")
+	init_environment
+	show_interactive_menu
+	;;
+
+# --- Project-dependent commands ---
+*)
+	init_environment
+	require_project "$1"
+
 	case "$1" in
 	start) start_project ;;
 	stop) stop_project ;;
@@ -422,7 +485,6 @@ if [[ -n "$1" ]]; then
 	status) show_status ;;
 	logs) show_logs ;;
 	shell) open_shell "$2" ;;
-	prune) prune_system ;;
 	destroy) destroy_project ;;
 	*)
 		log_msg "ERROR" "Unknown command: $1"
@@ -430,6 +492,5 @@ if [[ -n "$1" ]]; then
 		exit 1
 		;;
 	esac
-else
-	show_interactive_menu
-fi
+	;;
+esac
