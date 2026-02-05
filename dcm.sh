@@ -205,22 +205,45 @@ rebuild_project() {
 open_shell() {
 	local service=$1
 	if [[ -z "$service" ]]; then
-		log_msg "INFO" "Available services:"
-		run_compose ps --services
-		read -p "Enter service name: " service
-		if [[ -z "$service" ]]; then
-			log_msg "WARN" "Cancelled."
+		# Get list of RUNNING services
+		local running_services
+		mapfile -t running_services < <(run_compose ps --filter "status=running" --services)
+
+		local count=${#running_services[@]}
+
+		if [[ "$count" -eq 0 ]]; then
+			log_msg "ERROR" "No running services found. Use 'Start' (4) first."
 			return 1
+		elif [[ "$count" -eq 1 ]]; then
+			service="${running_services[0]}"
+			log_msg "INFO" "Automatically selecting the only running service: ${C_CYAN}${service}${C_RESET}"
+		else
+			log_msg "INFO" "Running services:"
+			for i in "${!running_services[@]}"; do
+				printf "  ${C_YELLOW}%d)${C_RESET} %s\n" "$((i + 1))" "${running_services[i]}"
+			done
+			read -p "Enter service name or number: " choice
+			if [[ -z "$choice" ]]; then
+				log_msg "WARN" "Cancelled."
+				return 1
+			fi
+
+			# Check if input is a number
+			if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -le "$count" ]] && [[ "$choice" -gt 0 ]]; then
+				service="${running_services[$((choice - 1))]}"
+			else
+				service="$choice"
+			fi
 		fi
 	fi
 
-	# Check if container is running
+	# Double check if container is running (validation for manual input)
 	if [[ -z "$(run_compose ps --filter "status=running" --services | grep -w "$service" || true)" ]]; then
 		log_msg "ERROR" "Service '$service' is not running. Start it first."
 		return 1
 	fi
 
-	log_msg "INFO" "Entering shell of service '$service'..."
+	log_msg "INFO" "Entering shell of service '${C_CYAN}$service${C_RESET}'..."
 	if ! run_compose exec "$service" /bin/bash; then
 		log_msg "WARN" "Bash not found, falling back to sh..."
 		run_compose exec "$service" /bin/sh
