@@ -329,8 +329,8 @@ show_interactive_menu() {
 	while true; do
 		# --- Live Metrics ---
 		local TOTAL_SVCS UP_SVCS
-		TOTAL_SVCS=$(run_compose config --services 2>/dev/null | grep -c . || echo "0")
-		UP_SVCS=$(run_compose ps -q 2>/dev/null | grep -c . || echo "0")
+		TOTAL_SVCS=$(run_compose config --services 2>/dev/null | grep -c . || true)
+		UP_SVCS=$(run_compose ps -q 2>/dev/null | grep -c . || true)
 
 		local STATUS_LINE
 		if [[ "$UP_SVCS" -eq "0" ]]; then
