@@ -341,16 +341,16 @@ show_interactive_menu() {
 
         if [[ "$PROJECT_ROOT_FOUND" == "true" ]]; then
             echo -e "${C_GRAY}--- Project Actions ---${C_RESET}"
-            printf "$fmt_val" "1" "Status (PS)" "Show processes"
-            printf "$fmt_val" "2" "Logs" "Follow output"
-            printf "$fmt_val" "3" "Shell" "Enter container"
+            printf "$fmt_val" "1" "Start" "up -d"
+            printf "$fmt_val" "2" "Stop" "down"
+            printf "$fmt_val" "3" "Restart" "Quick restart"
+            printf "$fmt_val" "4" "Reload" "Apply config"
+            printf "$fmt_val" "5" "Update" "pull + up"
+            printf "$fmt_val" "6" "Rebuild" "force-recreate"
             echo ""
-            printf "$fmt_val" "4" "Start" "up -d"
-            printf "$fmt_val" "5" "Stop" "down"
-            printf "$fmt_val" "6" "Restart" "Quick restart"
-            printf "$fmt_val" "7" "Reload" "Apply config"
-            printf "$fmt_val" "8" "Update" "pull + up"
-            printf "$fmt_val" "9" "Rebuild" "force-recreate"
+            printf "$fmt_val" "7" "Status (PS)" "Show processes"
+            printf "$fmt_val" "8" "Logs" "Follow output"
+            printf "$fmt_val" "9" "Shell" "Enter container"
             echo ""
             printf "$fmt_danger" "10" "DESTROY" "down -v --rmi"
             echo ""
@@ -379,15 +379,15 @@ show_interactive_menu() {
         esac
 
         case "$choice" in
-            1)  show_status ;;
-            2)  show_logs ;;
-            3)  open_shell ;;
-            4)  start_project ;;
-            5)  stop_project ;;
-            6)  restart_containers ;;
-            7)  reload_project ;;
-            8)  update_project ;;
-            9)  rebuild_project ;;
+            1)  start_project ;;
+            2)  stop_project ;;
+            3)  restart_containers ;;
+            4)  reload_project ;;
+            5)  update_project ;;
+            6)  rebuild_project ;;
+            7)  show_status ;;
+            8)  show_logs ;;
+            9)  open_shell ;;
             10) destroy_project ;;
             11) prune_system ;;
             i|I) install_globally ;;
