@@ -248,12 +248,12 @@ install_globally() {
 	fi
 
 	if [[ "$use_sudo" == "false" ]]; then
-		cp "${BASH_SOURCE[0]}" "$INSTALL_PATH" && chmod +x "$INSTALL_PATH"
+		cp "${BASH_SOURCE[0]}" "$INSTALL_PATH" && chmod 755 "$INSTALL_PATH"
 		log_msg "INFO" "Successfully installed to $INSTALL_PATH"
 	else
 		log_msg "WARN" "Need root permissions to install to $INSTALL_PATH"
 		if command -v sudo &>/dev/null; then
-			sudo cp "${BASH_SOURCE[0]}" "$INSTALL_PATH" && sudo chmod +x "$INSTALL_PATH"
+			sudo cp "${BASH_SOURCE[0]}" "$INSTALL_PATH" && sudo chmod 755 "$INSTALL_PATH"
 			log_msg "INFO" "Successfully installed to $INSTALL_PATH (via sudo)"
 		else
 			log_msg "ERROR" "Cannot write to $INSTALL_PATH and 'sudo' is not available."
