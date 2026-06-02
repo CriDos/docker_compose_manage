@@ -19,6 +19,12 @@ Supported Compose file names:
 
 ## Install
 
+Run directly from GitHub:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/CriDos/docker_compose_manage/main/dcm.sh)
+```
+
 Run from the repository:
 
 ```bash
