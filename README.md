@@ -1,121 +1,98 @@
-# compose_manage
+# DCM
 
-Универсальный скрипт `compose_manage.sh` предназначен для упрощения управления Docker-проектами, использующими `docker-compose`. Он предоставляет интерактивное меню и набор команд для запуска, остановки, перезапуска, обновления и обслуживания ваших Docker-контейнеров.
+Minimal Docker Compose manager.
 
-## Особенности
+`dcm` finds the nearest Compose file, enters that project directory, and runs common Docker Compose tasks through a small CLI or interactive menu.
 
-*   **Автоматическое определение `docker-compose`**: Скрипт автоматически определяет, использовать ли `docker-compose` или `docker compose` (плагин Docker CLI).
-*   **Проверка зависимостей**: Проверяет наличие Docker и `docker-compose` перед началом работы.
-*   **Интерактивное меню**: Удобный интерфейс для выполнения общих операций.
-*   **Поддержка командной строки**: Возможность запускать команды напрямую без входа в интерактивное меню.
-*   **Цветовая индикация**: Использует цвета для улучшения читаемости вывода.
+## Requirements
 
-## Требования
+- Bash
+- Docker
+- Docker Compose plugin (`docker compose`) or legacy `docker-compose`
 
-*   [Docker](https://docs.docker.com/get-docker/)
-*   [Docker Compose](https://docs.docker.com/compose/install/) (либо как отдельная утилита, либо как плагин Docker CLI)
+Supported Compose file names:
 
-## Установка
+- `compose.yaml`
+- `compose.yml`
+- `docker-compose.yml`
+- `docker-compose.yaml`
 
-1.  **Клонируйте репозиторий** (или скопируйте файл `compose_manage.sh` в корневую директорию вашего Docker-проекта):
-    ```bash
-    git clone https://github.com/your-username/compose_manage.git
-    cd compose_manage
-    ```
-2.  **Сделайте скрипт исполняемым**:
-    ```bash
-    chmod +x compose_manage.sh
-    ```
-3.  **Поместите `docker-compose.yml` (или `docker-compose.yaml`) в ту же директорию**, что и скрипт.
+## Install
 
-## Использование
-
-Вы можете запустить скрипт в интерактивном режиме или передать ему команду напрямую.
-
-### Интерактивный режим
-
-Запустите скрипт без аргументов, чтобы открыть интерактивное меню:
+Run from the repository:
 
 ```bash
-./compose_manage.sh
+chmod +x dcm.sh
+./dcm.sh install
 ```
 
-В меню вы сможете выбрать одну из следующих опций:
+This installs `dcm` to `/usr/local/bin/dcm`.
 
-```
-======================================================================
-   Меню управления для: [ИМЯ_ПРОЕКТА] (исп. docker-compose)
-======================================================================
- [1] Запустить проект             Запускает контейнеры (up -d)
- [2] Остановить проект            Останавливает контейнеры (down)
- [3] Перезапустить проект         Полностью перезапускает (down & up)
- [4] Обновить                     Скачивает новые образы (pull & up)
- [5] Показать статус              Показывает статус контейнеров (ps)
- [6] Показать логи                Выводит логи в реальном времени
-
---- Обслуживание и удаление ---
- [7] Войти в контейнер            Подключается к shell сервиса
- [8] Пересоздать                  Принудительно пересоздает контейнеры
- [9] Очистить систему             Удаляет неисп. объекты Docker
- [10] УДАЛИТЬ ПРОЕКТ              Удаляет контейнеры, тома и образы
-
- [0] Выход                        Завершает работу скрипта
-======================================================================
-```
-
-### Командная строка
-
-Вы можете передать команду в качестве аргумента скрипту:
+To uninstall:
 
 ```bash
-./compose_manage.sh [команда] [аргументы]
+dcm uninstall
 ```
 
-Доступные команды:
+## Usage
 
-*   `start`: Запускает проект (`docker-compose up -d`).
-    ```bash
-    ./compose_manage.sh start
-    ```
-*   `stop`: Останавливает проект (`docker-compose down`).
-    ```bash
-    ./compose_manage.sh stop
-    ```
-*   `restart`: Перезапускает проект (останавливает, затем запускает).
-    ```bash
-    ./compose_manage.sh restart
-    ```
-*   `update`: Обновляет образы и перезапускает контейнеры (`docker-compose pull && docker-compose up -d --remove-orphans`).
-    ```bash
-    ./compose_manage.sh update
-    ```
-*   `rebuild`: Принудительно пересоздает контейнеры (`docker-compose up -d --force-recreate`).
-    ```bash
-    ./compose_manage.sh rebuild
-    ```
-*   `status`: Показывает статус контейнеров (`docker-compose ps`).
-    ```bash
-    ./compose_manage.sh status
-    ```
-*   `logs`: Выводит логи проекта в реальном времени (`docker-compose logs -f --tail="100"`).
-    ```bash
-    ./compose_manage.sh logs
-    ```
-*   `shell [имя_сервиса]`: Подключается к оболочке указанного сервиса. Если имя сервиса не указано, скрипт предложит выбрать из списка доступных.
-    ```bash
-    ./compose_manage.sh shell my_service
-    # или
-    ./compose_manage.sh shell
-    ```
-*   `prune`: Очищает неиспользуемые Docker-объекты в системе (`docker system prune -af`). **Используйте с осторожностью!**
-    ```bash
-    ./compose_manage.sh prune
-    ```
-*   `destroy`: Полностью удаляет проект, включая контейнеры, сети, **тома (данные)** и образы. **Это необратимое действие, которое приведет к потере данных!**
-    ```bash
-    ./compose_manage.sh destroy
-    ```
+Interactive mode:
 
-## Лицензия
+```bash
+dcm
+```
 
-Этот проект распространяется под лицензией MIT. Подробности см. в файле `LICENSE`.
+Direct commands:
+
+```bash
+dcm start
+dcm stop
+dcm restart
+dcm reload
+dcm update
+dcm rebuild
+dcm status
+dcm logs
+dcm shell [service]
+dcm prune
+dcm destroy
+```
+
+## Commands
+
+- `start` - run `docker compose up -d`
+- `stop` - run `docker compose down`
+- `restart` - restart containers
+- `reload` - apply config changes with `up -d --remove-orphans`
+- `update` - pull images, then apply changes
+- `rebuild` - rebuild and recreate containers
+- `status` - show container status
+- `logs` - follow logs
+- `shell [service]` - open `/bin/bash` or `/bin/sh` in a running service
+- `prune` - prune unused Docker objects on the host
+- `destroy` - remove project containers, volumes, and local images
+- `install` - install the script globally
+- `uninstall` - remove the global install
+
+## Sudo
+
+Do not run project commands with `sudo`.
+
+`dcm` does not auto-prefix Docker commands with `sudo`. If Docker is not accessible by your user, fix Docker permissions instead:
+
+```bash
+sudo usermod -aG docker "$USER"
+newgrp docker
+```
+
+`sudo` is used only when installing or uninstalling `/usr/local/bin/dcm`, if that path requires elevated permissions.
+
+If you intentionally need to run a project command as root:
+
+```bash
+DCM_ALLOW_ROOT=1 sudo dcm status
+```
+
+## License
+
+MIT
