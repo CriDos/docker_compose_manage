@@ -25,6 +25,12 @@ Run directly from GitHub:
 bash <(curl -fsSL https://raw.githubusercontent.com/CriDos/docker_compose_manage/main/dcm.sh)
 ```
 
+Install directly from GitHub:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/CriDos/docker_compose_manage/main/dcm.sh) install
+```
+
 Run from the repository:
 
 ```bash

@@ -9,6 +9,7 @@ set -Eeuo pipefail
 # --- Configuration ---
 readonly SCRIPT_VERSION="6.0"
 readonly INSTALL_PATH="/usr/local/bin/dcm"
+readonly REMOTE_SCRIPT_URL="https://raw.githubusercontent.com/CriDos/docker_compose_manage/main/dcm.sh"
 readonly COMPOSE_FILES=("compose.yaml" "compose.yml" "docker-compose.yml" "docker-compose.yaml")
 readonly HINT_COLUMN=30
 
@@ -25,6 +26,8 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 PROJECT_NAME=""
 PROJECT_ROOT=""
 COMPOSE_CMD=()
+INSTALL_SOURCE=""
+INSTALL_SOURCE_TEMP=""
 
 # ==============================================================================
 #   Utilities
@@ -118,6 +121,39 @@ get_inode() {
         stat -f %i "$file" 2>/dev/null
     else
         stat -c %i "$file" 2>/dev/null
+    fi
+}
+
+prepare_install_source() {
+    local source="${BASH_SOURCE[0]}" temp
+
+    if [[ -f "$source" && -r "$source" && "$source" != /dev/fd/* && "$source" != /proc/*/fd/* ]]; then
+        INSTALL_SOURCE="$source"
+        return 0
+    fi
+
+    temp=$(mktemp "${TMPDIR:-/tmp}/dcm-install.XXXXXX") || return
+    INSTALL_SOURCE="$temp"
+    INSTALL_SOURCE_TEMP="$temp"
+
+    if [[ -r "$source" ]]; then
+        cp "$source" "$temp" || return
+    elif has_cmd curl; then
+        curl -fsSL "$REMOTE_SCRIPT_URL" -o "$temp" || return
+    elif has_cmd wget; then
+        wget -qO "$temp" "$REMOTE_SCRIPT_URL" || return
+    else
+        log_msg "ERROR" "Cannot prepare install source. Install curl or wget, or run from a local dcm.sh file."
+        return 1
+    fi
+
+    chmod 755 "$temp" || return
+}
+
+cleanup_install_source() {
+    if [[ -n "$INSTALL_SOURCE_TEMP" && -f "$INSTALL_SOURCE_TEMP" ]]; then
+        rm -f "$INSTALL_SOURCE_TEMP"
+        INSTALL_SOURCE_TEMP=""
     fi
 }
 
@@ -355,8 +391,11 @@ install_globally() {
 
     confirm "Install/Update 'dcm' globally?" || { log_msg "INFO" "Cancelled."; return 0; }
 
-    if [[ -f "$INSTALL_PATH" && "$(get_inode "${BASH_SOURCE[0]}")" == "$(get_inode "$INSTALL_PATH")" ]]; then
+    prepare_install_source || return
+
+    if [[ -z "$INSTALL_SOURCE_TEMP" && -f "$INSTALL_PATH" && "$(get_inode "$INSTALL_SOURCE")" == "$(get_inode "$INSTALL_PATH")" ]]; then
         log_msg "ERROR" "You are running the installed version. Run from the source directory to update."
+        cleanup_install_source
         return 1
     fi
 
@@ -364,17 +403,20 @@ install_globally() {
     [[ ! -w "$install_dir" || (-f "$INSTALL_PATH" && ! -w "$INSTALL_PATH") ]] && use_sudo=true
 
     if [[ "$use_sudo" == "false" ]]; then
-        cp "${BASH_SOURCE[0]}" "$INSTALL_PATH" || return
-        chmod 755 "$INSTALL_PATH" || return
+        cp "$INSTALL_SOURCE" "$INSTALL_PATH" || { cleanup_install_source; return 1; }
+        chmod 755 "$INSTALL_PATH" || { cleanup_install_source; return 1; }
         log_msg "INFO" "Installed to $INSTALL_PATH"
     elif has_cmd sudo; then
         log_msg "WARN" "Requesting root permissions for installation only..."
-        sudo install -m 755 "${BASH_SOURCE[0]}" "$INSTALL_PATH" || return
+        sudo install -m 755 "$INSTALL_SOURCE" "$INSTALL_PATH" || { cleanup_install_source; return 1; }
         log_msg "INFO" "Installed to $INSTALL_PATH"
     else
         log_msg "ERROR" "Cannot write to $INSTALL_PATH and 'sudo' is not available."
+        cleanup_install_source
         return 1
     fi
+
+    cleanup_install_source
 }
 
 uninstall_globally() {
