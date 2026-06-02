@@ -155,6 +155,29 @@ cleanup_install_source() {
     fi
 }
 
+verify_installation() {
+    local output
+
+    if [[ ! -x "$INSTALL_PATH" ]]; then
+        log_msg "ERROR" "Installed file is not executable: $INSTALL_PATH"
+        return 1
+    fi
+
+    output=$("$INSTALL_PATH" help 2>&1) || {
+        log_msg "ERROR" "Installed dcm failed to run:"
+        printf "%s\n" "$output" >&2
+        return 1
+    }
+
+    if [[ "$output" != *"Docker Compose Manager"* ]]; then
+        log_msg "ERROR" "Installed dcm did not return the expected help output."
+        log_msg "ERROR" "First bytes of installed file:"
+        head -c 200 "$INSTALL_PATH" >&2 || true
+        printf "\n" >&2
+        return 1
+    fi
+}
+
 usage() {
     cat <<USAGE
 Docker Compose Manager v${SCRIPT_VERSION}
@@ -415,6 +438,7 @@ install_globally() {
     fi
 
     cleanup_install_source
+    verify_installation || return
 }
 
 uninstall_globally() {
