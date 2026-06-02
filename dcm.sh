@@ -136,9 +136,7 @@ prepare_install_source() {
     INSTALL_SOURCE="$temp"
     INSTALL_SOURCE_TEMP="$temp"
 
-    if [[ -r "$source" ]]; then
-        cp "$source" "$temp" || return
-    elif has_cmd curl; then
+    if has_cmd curl; then
         curl -fsSL "$REMOTE_SCRIPT_URL" -o "$temp" || return
     elif has_cmd wget; then
         wget -qO "$temp" "$REMOTE_SCRIPT_URL" || return
