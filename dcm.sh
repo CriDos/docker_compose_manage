@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 # ==============================================================================
-#   Docker Compose Manager (DCM) v6.1
+#   Docker Compose Manager (DCM) v6.0
 #   A small CLI for managing Docker Compose projects.
 # ==============================================================================
 
 set -Eeuo pipefail
 
 # --- Configuration ---
-readonly SCRIPT_VERSION="6.1"
+readonly SCRIPT_VERSION="6.0"
 readonly INSTALL_PATH="/usr/local/bin/dcm"
 readonly REMOTE_SCRIPT_URL="https://raw.githubusercontent.com/CriDos/docker_compose_manage/main/dcm.sh"
 readonly COMPOSE_FILES=("compose.yaml" "compose.yml" "docker-compose.yml" "docker-compose.yaml")
-readonly COMPOSE_OVERRIDE_FILES=("compose.override.yaml" "compose.override.yml" "docker-compose.override.yml" "docker-compose.override.yaml")
 readonly HINT_COLUMN=30
 
 # --- UI Colors ---
@@ -26,8 +25,6 @@ readonly C_GRAY='\033[0;90m'
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 PROJECT_NAME=""
 PROJECT_ROOT=""
-PROJECT_COMPOSE_FILE=""
-COMPOSE_FILE_ARGS=()
 COMPOSE_CMD=()
 INSTALL_SOURCE=""
 INSTALL_SOURCE_TEMP=""
@@ -102,28 +99,13 @@ docker_permission_hint() {
     log_msg "WARN" "Then log out/in, or run: newgrp docker"
 }
 
-find_compose_file() {
-    local dir="$1" file
-
-    for file in "${COMPOSE_FILES[@]}"; do
-        [[ -f "$dir/$file" ]] && { printf "%s\n" "$file"; return 0; }
-    done
-
-    for file in "${COMPOSE_OVERRIDE_FILES[@]}"; do
-        [[ -f "$dir/$file" ]] && { printf "%s\n" "$file"; return 0; }
-    done
-
-    return 1
-}
-
 find_project_root() {
-    local dir="$1" parent found
+    local dir="$1" parent file
 
     while [[ -n "$dir" ]]; do
-        if found=$(find_compose_file "$dir"); then
-            printf "%s\n%s\n" "$dir" "$found"
-            return 0
-        fi
+        for file in "${COMPOSE_FILES[@]}"; do
+            [[ -f "$dir/$file" ]] && { printf "%s\n" "$dir"; return 0; }
+        done
 
         parent=$(dirname "$dir")
         [[ "$parent" == "$dir" ]] && break
@@ -226,43 +208,20 @@ USAGE
 # ==============================================================================
 
 load_project() {
-    local target_dir="" found_file="" search_result
+    local target_dir=""
 
-    search_result=$(find_project_root "$(pwd)") || true
-    if [[ -z "$search_result" && "$SCRIPT_DIR" != "/usr/local/bin" && "$SCRIPT_DIR" != "/usr/bin" ]]; then
-        search_result=$(find_project_root "$SCRIPT_DIR") || true
+    target_dir=$(find_project_root "$(pwd)") || true
+    if [[ -z "$target_dir" && "$SCRIPT_DIR" != "/usr/local/bin" && "$SCRIPT_DIR" != "/usr/bin" ]]; then
+        target_dir=$(find_project_root "$SCRIPT_DIR") || true
     fi
 
-    if [[ -n "$search_result" ]]; then
-        { IFS=$'\n' read -r target_dir; IFS= read -r found_file; } <<< "$search_result" || true
-    fi
-
-    if [[ -n "$target_dir" && -n "$found_file" ]]; then
+    if [[ -n "$target_dir" ]]; then
         cd "$target_dir" || die "Cannot enter project directory: $target_dir"
         PROJECT_ROOT="$target_dir"
         PROJECT_NAME=$(basename "$target_dir")
-        PROJECT_COMPOSE_FILE="$found_file"
-
-        # If only an override file was found (no base), pass it explicitly
-        COMPOSE_FILE_ARGS=()
-        local is_override=false
-        for of in "${COMPOSE_OVERRIDE_FILES[@]}"; do
-            [[ "$found_file" == "$of" ]] && is_override=true && break
-        done
-        if [[ "$is_override" == "true" ]]; then
-            local has_base=false
-            for bf in "${COMPOSE_FILES[@]}"; do
-                [[ -f "$target_dir/$bf" ]] && has_base=true && break
-            done
-            if [[ "$has_base" == "false" ]]; then
-                COMPOSE_FILE_ARGS=("-f" "$found_file")
-            fi
-        fi
     else
         PROJECT_ROOT=""
         PROJECT_NAME="<No Config>"
-        PROJECT_COMPOSE_FILE=""
-        COMPOSE_FILE_ARGS=()
     fi
 }
 
@@ -307,11 +266,7 @@ init_system_environment() {
 }
 
 run_compose() {
-    if [[ ${#COMPOSE_FILE_ARGS[@]} -gt 0 ]]; then
-        "${COMPOSE_CMD[@]}" "${COMPOSE_FILE_ARGS[@]}" "$@"
-    else
-        "${COMPOSE_CMD[@]}" "$@"
-    fi
+    "${COMPOSE_CMD[@]}" "$@"
 }
 
 run_docker() {
@@ -553,7 +508,6 @@ show_interactive_menu() {
         printf "   DCM:     ${C_GREEN}v%s${C_RESET}\n" "$SCRIPT_VERSION"
         printf "   Project: ${C_CYAN}%s${C_RESET}\n" "$PROJECT_NAME"
         printf "   Path:    ${C_GRAY}%s${C_RESET}\n" "${PROJECT_ROOT:-$(pwd)}"
-        [[ -n "$PROJECT_COMPOSE_FILE" ]] && printf "   File:    ${C_GRAY}%s${C_RESET}\n" "$PROJECT_COMPOSE_FILE"
         printf "   Status:  %b\n" "$status_line"
         printf "${C_CYAN}======================================================================${C_RESET}\n"
 
